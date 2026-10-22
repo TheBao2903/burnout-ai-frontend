@@ -3,14 +3,13 @@
 // Phản ánh chuẩn khoa học (OLBI & JD-R) & Thực tế người đi làm
 // ==========================================
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   TrendingUp,
   TrendingDown,
   Minus,
   AlertTriangle,
   AlertCircle,
-  CheckCircle,
   Clock,
   Loader2,
   Brain,
@@ -20,7 +19,6 @@ import {
   Briefcase,
   Flame,
   MessageSquareQuote,
-  Sparkles,
   Info,
 } from "lucide-react";
 import {
@@ -33,6 +31,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from "recharts";
+import { isAxiosError } from "axios";
 import {
   dashboardService,
   type BurnoutAnalytics as BurnoutAnalyticsType,
@@ -49,8 +48,8 @@ const LEVEL_CONFIG = {
   low: { label: "Thấp / Tốt", color: "bg-emerald-500", text: "text-emerald-600", border: "border-emerald-200", bgLight: "bg-emerald-50" },
 };
 
-const getLevelConfig = (level: string | undefined) => {
-  return LEVEL_CONFIG[level as keyof typeof LEVEL_CONFIG] || LEVEL_CONFIG.low;
+const getLevelConfig = (level: string | null | undefined) => {
+  return LEVEL_CONFIG[level as keyof typeof LEVEL_CONFIG] || { label: "Chưa có dữ liệu", color: "bg-gray-300", text: "text-gray-600", border: "border-gray-200", bgLight: "bg-gray-50" };
 };
 
 const getTrendBadge = (trend: string | undefined) => {
@@ -59,6 +58,8 @@ const getTrendBadge = (trend: string | undefined) => {
       return { icon: TrendingUp, color: "text-red-600 bg-red-50", label: "Có chiều hướng tăng" };
     case "decreasing":
       return { icon: TrendingDown, color: "text-emerald-600 bg-emerald-50", label: "Đang giảm bớt / Cải thiện" };
+    case "insufficient_data":
+      return { icon: Minus, color: "text-gray-600 bg-gray-100", label: "Chưa đủ dữ liệu xu hướng" };
     default:
       return { icon: Minus, color: "text-gray-600 bg-gray-100", label: "Duy trì ổn định" };
   }
@@ -114,31 +115,31 @@ export default function BurnoutAnalytics({
   const [internalLoading, setInternalLoading] = useState(data === undefined);
   const [internalError, setInternalError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (data === undefined) {
-      fetchAnalytics();
-    }
-  }, [days, userId, data]);
-
-  const fetchAnalytics = async () => {
+  const fetchAnalytics = useCallback(async (signal?: AbortSignal) => {
+    await Promise.resolve();
+    if (signal?.aborted) return;
     setInternalLoading(true);
     setInternalError(null);
     try {
       const validDays = Math.max(1, Math.min(365, Number(days) || 30));
-      const res = await dashboardService.getBurnoutAnalytics(validDays, userId);
-      setInternalAnalytics(res);
-    } catch (err: any) {
-      console.error("Failed to fetch burnout analytics:", err);
-      const msg = err?.response?.data?.detail
-        ? (typeof err.response.data.detail === "string"
-            ? err.response.data.detail
-            : JSON.stringify(err.response.data.detail))
-        : "Không thể tải dữ liệu phân tích. Vui lòng thử lại.";
+      const res = await dashboardService.getBurnoutAnalytics(validDays, userId, undefined, signal);
+      if (!signal?.aborted) setInternalAnalytics(res);
+    } catch (err: unknown) {
+      if (signal?.aborted) return;
+      const detail = isAxiosError(err) ? err.response?.data?.detail : null;
+      const msg = detail ? (typeof detail === "string" ? detail : JSON.stringify(detail)) : "Không thể tải dữ liệu phân tích. Vui lòng thử lại.";
       setInternalError(msg);
     } finally {
-      setInternalLoading(false);
+      if (!signal?.aborted) setInternalLoading(false);
     }
-  };
+  }, [days, userId]);
+
+  useEffect(() => {
+    if (data !== undefined) return;
+    const controller = new AbortController();
+    void Promise.resolve().then(() => { if (!controller.signal.aborted) return fetchAnalytics(controller.signal); });
+    return () => controller.abort();
+  }, [data, fetchAnalytics]);
 
   const analytics = data !== undefined ? data : internalAnalytics;
   const isLoading = externalLoading !== undefined ? externalLoading : internalLoading;
@@ -181,7 +182,7 @@ export default function BurnoutAnalytics({
     return (
       <div className="bg-gray-50 border border-gray-200 rounded-xl p-8 text-center">
         <Brain className="w-12 h-12 mx-auto text-gray-400 mb-4" />
-        <h3 className="text-lg font-medium text-gray-700">Chưa có dữ liệu theo dõi</h3>
+        <h3 className="text-lg font-medium text-gray-700">Chưa có dữ liệu check-in trong khoảng này</h3>
         <p className="text-sm text-gray-500 mt-2 max-w-md mx-auto">
           Hãy hoàn thành bài khảo sát trạng thái để hệ thống xây dựng bức tranh bối cảnh công việc và mức độ năng lượng của bạn.
         </p>
@@ -189,7 +190,7 @@ export default function BurnoutAnalytics({
     );
   }
 
-  const { sta_core, sta_context, sta_trend, synthesized_insight, warnings, current } = analytics;
+  const { sta_core, sta_context, sta_trend, warnings } = analytics;
 
   // =========================================================================
   // RENDER GIAO DIỆN CHUẨN KHOA HỌC STA (KHI CÓ DỮ LIỆU STA_CORE)
@@ -209,15 +210,15 @@ export default function BurnoutAnalytics({
             <div>
               <h2 className="text-base font-bold text-gray-900 flex items-center gap-2">
                 <Flame className="w-5 h-5 text-amber-500" />
-                Chỉ Số Cốt Lõi: Cạn Kiệt Năng Lượng & Mất Gắn Kết (OLBI Core)
+                Trạng thái check-in: Cạn kiệt năng lượng & Mất gắn kết
               </h2>
               <p className="text-xs text-gray-500 mt-0.5">
-                Đánh giá theo mô hình Oldenburg Burnout Inventory (thang điểm 1.0 - 5.0)
+                Tổng hợp check-in hằng ngày 9 câu · Thang 1–5 · Khác với bài OLBI định kỳ 16 câu
               </p>
             </div>
-            {current?.analyzed_at && (
+            {sta_trend?.at(-1)?.analyzed_at && (
               <span className="text-xs text-gray-400 flex items-center gap-1">
-                <Clock className="w-3.5 h-3.5" /> {formatDate(current.analyzed_at)}
+                <Clock className="w-3.5 h-3.5" /> {formatDate(sta_trend?.at(-1)?.analyzed_at)}
               </span>
             )}
           </div>
@@ -308,8 +309,8 @@ export default function BurnoutAnalytics({
           <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-xs">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="font-bold text-gray-900 text-sm">Diễn Biến Cạn Kiệt & Gắn Kết Theo Phiên Khảo Sát</h3>
-                <p className="text-xs text-gray-500 mt-0.5">Theo dõi sự dao động qua {sta_trend.length} phiên check-in gần nhất</p>
+                <h3 className="font-bold text-gray-900 text-sm">Diễn biến check-in hằng ngày</h3>
+                <p className="text-xs text-gray-500 mt-0.5">Theo dõi sự dao động qua {sta_trend.length} ngày có check-in gần nhất</p>
               </div>
               <span className="text-xs font-semibold px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-lg">
                 Thang đo 1 - 5
@@ -344,7 +345,7 @@ export default function BurnoutAnalytics({
                             </div>
                             <div className="flex items-center justify-between text-blue-600">
                               <span>Giấc ngủ:</span>
-                              <span>{item.sleep_hours}h (Hồi phục: {item.recovery_score}/5)</span>
+                              <span>{item.sleep_hours ?? "—"}h (Hồi phục: {item.recovery_score ?? "—"}/5)</span>
                             </div>
                             {item.quick_overload >= 4 && (
                               <div className="text-amber-600 font-medium">⚠️ Có cảm giác quá tải</div>
@@ -409,35 +410,35 @@ export default function BurnoutAnalytics({
                         ? "bg-emerald-100 text-emerald-700"
                         : sta_context.recovery.status === "moderate"
                         ? "bg-yellow-100 text-yellow-700"
-                        : "bg-red-100 text-red-700"
+                        : sta_context.recovery.status === "insufficient_data" ? "bg-gray-100 text-gray-600" : "bg-red-100 text-red-700"
                     }`}
                   >
                     {sta_context.recovery.status === "good"
                       ? "Phục hồi tốt"
                       : sta_context.recovery.status === "moderate"
                       ? "Mức vừa phải"
-                      : "Thiếu ngủ / Mệt"}
+                      : sta_context.recovery.status === "insufficient_data" ? "Chưa có dữ liệu" : "Thiếu ngủ / Mệt"}
                   </span>
                 </div>
                 <div className="space-y-3 mt-3">
                   <div className="flex items-baseline justify-between">
                     <span className="text-xs text-gray-500">Giờ ngủ trung bình:</span>
                     <span className="text-lg font-bold text-gray-900">
-                      {sta_context.recovery.avg_sleep_hours.toFixed(1)}h / đêm
+                      {sta_context.recovery.avg_sleep_hours?.toFixed(1) ?? "—"}h / đêm
                     </span>
                   </div>
                   <div className="flex items-baseline justify-between">
                     <span className="text-xs text-gray-500">Cảm nhận sảng khoái:</span>
                     <span className="text-lg font-bold text-indigo-600">
-                      {sta_context.recovery.avg_recovery_score.toFixed(1)} / 5.0
+                      {sta_context.recovery.avg_recovery_score?.toFixed(1) ?? "—"} / 5.0
                     </span>
                   </div>
                 </div>
               </div>
               <p className="text-xs text-gray-400 mt-4 pt-3 border-t">
-                {sta_context.recovery.avg_sleep_hours < 6.5
+                {sta_context.recovery.avg_sleep_hours != null && sta_context.recovery.avg_sleep_hours < 6.5
                   ? "⚠️ Cần chú ý nâng cao thời lượng ngủ để tránh kiệt sức."
-                  : "✓ Duy trì đều đặn thời lượng nghỉ ngơi phục hồi này."}
+                  : sta_context.recovery.avg_sleep_hours == null ? "Chưa có thời lượng ngủ để nhận xét về giấc ngủ." : "Theo dõi thêm cảm nhận hồi phục để đối chiếu với thời lượng ngủ."}
               </p>
             </div>
 
@@ -456,13 +457,13 @@ export default function BurnoutAnalytics({
                   <div className="flex items-baseline justify-between">
                     <span className="text-xs text-gray-500">Điểm yêu cầu công việc (JD):</span>
                     <span className="text-lg font-bold text-gray-900">
-                      {sta_context.job_demands.score.toFixed(1)} / 5.0
+                      {sta_context.job_demands.score?.toFixed(1) ?? "—"} / 5.0
                     </span>
                   </div>
                   <div className="flex items-baseline justify-between">
                     <span className="text-xs text-gray-500">Thời gian làm thêm (OT):</span>
                     <span className="text-lg font-bold text-amber-600">
-                      {sta_context.work_changes.total_overtime_hours}h{" "}
+                      {sta_context.work_changes.total_overtime_hours ?? "—"}h{" "}
                       <span className="text-xs font-normal text-gray-500">
                         ({sta_context.work_changes.overtime_days} ngày)
                       </span>
@@ -471,9 +472,9 @@ export default function BurnoutAnalytics({
                 </div>
               </div>
               <p className="text-xs text-gray-400 mt-4 pt-3 border-t">
-                {sta_context.work_changes.total_overtime_hours > 0
+                {sta_context.work_changes.total_overtime_hours != null && sta_context.work_changes.total_overtime_hours > 0
                   ? "Tăng ca dồn dập có thể làm giảm hiệu suất dài hạn."
-                  : "Không ghi nhận thời gian tăng ca đáng kể trong kỳ."}
+                  : sta_context.work_changes.total_overtime_hours == null ? "Chưa thu thập giờ tăng ca trong ngày; không dùng giờ tăng ca nền theo tuần." : "Không ghi nhận thời gian tăng ca đáng kể trong kỳ."}
               </p>
             </div>
 
@@ -529,45 +530,6 @@ export default function BurnoutAnalytics({
           </div>
         </div>
 
-        {/* KHỐI 4: NHẬN ĐỊNH BỐI CẢNH TỔNG HỢP (SYNTHESIZED INSIGHT) */}
-        {synthesized_insight && (
-          <div className="bg-linear-to-br from-indigo-50/80 via-white to-purple-50/80 border border-indigo-100 rounded-2xl p-5 shadow-xs">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center">
-                  <Sparkles className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-gray-900 text-sm">Nhận Định Bối Cảnh Thực Tế Từ Hệ Thống</h3>
-                  <p className="text-xs text-gray-500">Phân tích đa chiều kết hợp công việc, giấc ngủ và năng lượng</p>
-                </div>
-              </div>
-              <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-medium text-indigo-700 bg-indigo-50 border border-indigo-200/80 px-2.5 py-0.5 rounded-full shadow-2xs">
-                <Sparkles className="w-3 h-3 text-indigo-500" />
-                Gemini AI Synthesis
-              </span>
-            </div>
-
-            <p className="text-sm text-gray-700 leading-relaxed font-normal bg-white/70 p-3.5 rounded-xl border border-indigo-50">
-              {synthesized_insight.summary}
-            </p>
-
-            {synthesized_insight.key_observations && synthesized_insight.key_observations.length > 0 && (
-              <div className="mt-3 space-y-1.5">
-                <p className="text-xs font-bold text-indigo-900 uppercase tracking-wider">Quan sát trọng yếu:</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  {synthesized_insight.key_observations.map((obs, idx) => (
-                    <div key={idx} className="flex items-start gap-2 text-xs text-gray-700 bg-white p-2.5 rounded-lg border border-gray-100">
-                      <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 mt-1.5 flex-shrink-0" />
-                      <span>{obs}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
         {/* KHỐI 5: CẢNH BÁO NẾU CÓ */}
         {warnings && warnings.length > 0 && (
           <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-xs">
@@ -615,9 +577,9 @@ export default function BurnoutAnalytics({
   return (
     <div className="space-y-4">
       <div className="bg-white rounded-2xl border border-gray-100 p-5 text-center">
-        <h3 className="text-base font-bold text-gray-800">Dữ liệu khảo sát theo phiên cũ</h3>
+        <h3 className="text-base font-bold text-gray-800">Chưa có check-in trong khoảng đang xem</h3>
         <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">
-          Bạn vừa có phiên khảo sát cũ. Hãy hoàn thành một bài khảo sát trạng thái mới để mở khóa toàn bộ biểu đồ cạn kiệt, bối cảnh công việc và giấc ngủ!
+          Hãy thực hiện check-in hằng ngày hoặc đổi khoảng xem. Lịch sử OLBI định kỳ nằm trong phần Tiến triển OLBI riêng.
         </p>
       </div>
     </div>

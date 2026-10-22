@@ -11,6 +11,7 @@ import type {
   AnalysisResult,
   HistoryItem,
   HistoryResponse,
+  HistorySurveyItem,
   RollingStats,
   AlertsResponse,
 } from '../types/survey';
@@ -20,6 +21,10 @@ import type {
 // ==========================================
 
 export const surveyService = {
+  async getDetail(id: string, signal?: AbortSignal): Promise<HistorySurveyItem> {
+    const response = await api.get<HistorySurveyItem>(`/api/survey/${encodeURIComponent(id)}`, { signal });
+    return response.data;
+  },
   /**
    * Geocode address to coordinates
    */
@@ -33,8 +38,8 @@ export const surveyService = {
    * NOTE: Đây là quick survey-only analysis, KHÔNG dùng cho full assessment
    *       Để có full burnout analysis, dùng /api/v1/assessments/{id}/analyze
    */
-  async analyze(data: SurveyData): Promise<AnalysisResult> {
-    const response = await apiLongTimeout.post<AnalysisResult>('/api/survey/analyze', data);
+  async analyze(data: SurveyData, assessmentId?: string): Promise<AnalysisResult> {
+    const response = await apiLongTimeout.post<AnalysisResult>('/api/survey/analyze', { ...data, assessment_id: assessmentId });
     return response.data;
   },
 
@@ -75,6 +80,17 @@ export const surveyService = {
     return response.data;
   },
 
+  async getQuestionnaireStatus(): Promise<{
+    latest_olbi: HistoryItem | null;
+    interval_days: number;
+    next_due_at: string | null;
+    is_due: boolean;
+    today_completed: boolean;
+  }> {
+    const response = await api.get('/api/survey/questionnaire-status');
+    return response.data;
+  },
+
   /**
    * Get survey history
    */
@@ -102,18 +118,12 @@ export const surveyService = {
   /**
    * Save survey result to backend
    *
-   * CLEAN ARCHITECTURE:
-   * - Survey CHỈ lưu raw answers
-   * - KHÔNG gửi analysis_result (thuộc BurnoutResult)
-   * - KHÔNG gửi recommendations (thuộc Recommendation Engine)
-   *
-   * Để có full burnout analysis, sau khi save cần gọi:
-   * POST /api/v1/assessments/{assessmentId}/analyze
+   * Sends raw answers and protocol version. The server stores its own scoring
+   * snapshot and updates the BurnoutEngine result. Reuse assessmentId on retry.
    */
-  async saveSurvey(data: SurveyData): Promise<void> {
-    // Generate assessment_id
-    const assessmentId = `survey_${Date.now()}`;
-    await apiLongTimeout.post(`/api/v1/assessments/${assessmentId}/survey`, data);
+  async saveSurvey(data: SurveyData, assessmentId = `survey_${crypto.randomUUID()}`): Promise<{ survey: SurveyData; analysis_result?: AnalysisResult }> {
+    const response = await apiLongTimeout.post<{ survey: SurveyData; analysis_result?: AnalysisResult }>(`/api/v1/assessments/${assessmentId}/survey`, data);
+    return response.data;
   },
 
   /**
@@ -141,8 +151,8 @@ export const surveyService = {
   /**
    * Get survey questions
    */
-  async getQuestions(): Promise<unknown[]> {
-    const response = await api.get<unknown[]>('/api/survey/questions');
+  async getQuestions(): Promise<{ questions: unknown[]; daily_questions: unknown[]; periodic_questions: unknown[] }> {
+    const response = await api.get<{ questions: unknown[]; daily_questions: unknown[]; periodic_questions: unknown[] }>('/api/v1/assessments/questions');
     return response.data;
   },
 };

@@ -2,8 +2,8 @@
 // Survey Test Page - Khảo sát trạng thái & Gợi ý (STA Scientific Standard)
 // ==========================================
 
-import { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   ClipboardList,
   Loader2,
@@ -51,11 +51,12 @@ import type {
 import {
   DAILY_CHECKIN_INITIAL_STATE,
   OLBI_16_QUESTIONS,
+  OLBI_LIKERT_LABELS,
+  SURVEY_QUESTIONS,
   OLBI_16_INITIAL_STATE,
   DEFAULT_LIKERT_LABELS,
   DIMENSION_LABELS,
   TREND_LABELS,
-  RISK_LEVEL_CONFIG,
   INDUSTRY_OPTIONS,
 } from "../constants/survey";
 
@@ -63,8 +64,9 @@ import {
 interface LikertScaleProps {
   value: number;
   onChange: (val: number) => void;
-  labels?: [string, string, string, string, string];
+  labels?: readonly string[];
   reverseColor?: boolean;
+  max?: number;
 }
 
 function LikertScale({
@@ -72,6 +74,7 @@ function LikertScale({
   onChange,
   labels = DEFAULT_LIKERT_LABELS,
   reverseColor = false,
+  max = 5,
 }: LikertScaleProps) {
   const getButtonClass = (score: number) => {
     const isSelected = value === score;
@@ -79,6 +82,10 @@ function LikertScale({
       return "border-gray-200 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300";
     }
 
+    if (max === 4) {
+      const risk = reverseColor ? 5 - score : score;
+      return ["", "bg-green-600 text-white border-green-600", "bg-blue-600 text-white border-blue-600", "bg-orange-500 text-white border-orange-500", "bg-red-600 text-white border-red-600"][risk];
+    }
     if (reverseColor) {
       // 1 is bad (red), 5 is good (green)
       if (score === 1) return "bg-red-600 text-white border-red-600 shadow-sm";
@@ -105,11 +112,13 @@ function LikertScale({
 
   return (
     <div className="space-y-1.5">
-      <div className="grid grid-cols-5 gap-2">
-        {[1, 2, 3, 4, 5].map((score) => (
+      <div className={`grid ${max === 4 ? "grid-cols-4" : "grid-cols-5"} gap-2`}>
+        {Array.from({ length: max }, (_, i) => i + 1).map((score) => (
           <button
             key={score}
             type="button"
+            aria-pressed={value === score}
+            aria-label={`${score}: ${labels[score - 1]}`}
             onClick={() => onChange(score)}
             className={`py-2.5 px-1 rounded-xl border text-sm font-semibold transition-all flex flex-col items-center justify-center ${getButtonClass(
               score
@@ -121,19 +130,23 @@ function LikertScale({
       </div>
       <div className="flex justify-between text-[11px] text-gray-500 px-1">
         <span className="max-w-[40%] text-left">{labels[0]}</span>
-        <span className="font-medium text-gray-700">{labels[value - 1]}</span>
-        <span className="max-w-[40%] text-right">{labels[4]}</span>
+        <span className="font-medium text-gray-700">{value ? labels[value - 1] : "Chưa trả lời"}</span>
+        <span className="max-w-[40%] text-right">{labels[max - 1]}</span>
       </div>
     </div>
   );
 }
 
 export default function SurveyTest() {
+  const [searchParams] = useSearchParams();
+  const requestedSurveyId = searchParams.get("survey_id");
+  const [detailError, setDetailError] = useState("");
+  const [detailLoading, setDetailLoading] = useState(false);
   // Baseline loaded from profile
   const [profile, setProfile] = useState<UserProfile | null>(null);
 
   // Survey Mode State: "daily" (8 items) vs "olbi16" (16 items full test)
-  const [surveyMode, setSurveyMode] = useState<"daily" | "olbi16">("daily");
+  const [surveyMode, setSurveyMode] = useState<"daily" | "olbi16">(() => searchParams.get("mode") === "olbi16" ? "olbi16" : "daily");
 
   // Daily Check-in Form State
   const [dailyData, setDailyData] = useState<DailyCheckinData>({
@@ -145,13 +158,15 @@ export default function SurveyTest() {
     ...OLBI_16_INITIAL_STATE,
   });
 
+  const [questionnaireStatus, setQuestionnaireStatus] = useState<Awaited<ReturnType<typeof surveyService.getQuestionnaireStatus>> | null>(null);
+
   // Rolling stats & alerts
   const [rollingStats, setRollingStats] = useState<RollingStats | null>(null);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
 
   // Address for recommendation
   const [address, setAddress] = useState("");
-  const [resolvedAddress, setResolvedAddress] = useState("");
+  const [, setResolvedAddress] = useState("");
   const [currentLocation, setCurrentLocation] = useState<{
     lat: number;
     lon: number;
@@ -177,6 +192,25 @@ export default function SurveyTest() {
   const [showHistory, setShowHistory] = useState(false);
   const [selectedHistoryItem, setSelectedHistoryItem] =
     useState<HistorySurveyItem | null>(null);
+
+  useEffect(() => {
+    if (!requestedSurveyId) return;
+    const controller = new AbortController();
+    const loadDetail = async () => {
+      setDetailLoading(true);
+      setDetailError("");
+      try {
+        const detail = await surveyService.getDetail(requestedSurveyId, controller.signal);
+        if (!controller.signal.aborted) setSelectedHistoryItem(detail);
+      } catch {
+        if (!controller.signal.aborted) setDetailError("Không tải được lần khảo sát này. Bản ghi có thể không còn hoặc bạn chưa có quyền xem.");
+      } finally {
+        if (!controller.signal.aborted) setDetailLoading(false);
+      }
+    };
+    void loadDetail();
+    return () => controller.abort();
+  }, [requestedSurveyId]);
 
   // Helper state updater functions for daily check-in
   const setExhaustion = (key: "e1" | "e2" | "e3", val: number) => {
@@ -305,6 +339,7 @@ export default function SurveyTest() {
       factors: result.factors,
       recommendations: result.recommendations,
       ai_insight: result.ai_insight,
+      questionnaire_scores: result.questionnaire_scores,
     };
   };
 
@@ -334,65 +369,11 @@ export default function SurveyTest() {
     const otToday = 0;
 
     if (surveyMode === "olbi16") {
-      // Calculate 16-item OLBI mean scores with reverse items handled
-      const e_vals = [
-        olbiData.exhaustion.e1,
-        olbiData.exhaustion.e2,
-        6 - olbiData.exhaustion.e3, // reverse
-        olbiData.exhaustion.e4,
-        6 - olbiData.exhaustion.e5, // reverse
-        olbiData.exhaustion.e6,
-        6 - olbiData.exhaustion.e7, // reverse
-        olbiData.exhaustion.e8,
-      ];
-      const e_mean = e_vals.reduce((a, b) => a + b, 0) / e_vals.length;
-
-      const d_vals = [
-        olbiData.disengagement.d1,
-        6 - olbiData.disengagement.d2, // reverse
-        olbiData.disengagement.d3,
-        6 - olbiData.disengagement.d4, // reverse
-        olbiData.disengagement.d5,
-        6 - olbiData.disengagement.d6, // reverse
-        olbiData.disengagement.d7,
-        6 - olbiData.disengagement.d8, // reverse
-      ];
-      const d_mean = d_vals.reduce((a, b) => a + b, 0) / d_vals.length;
-
       return {
-        sleep_hours: olbiData.sleep_hours,
-        recovery_score: olbiData.recovery_score,
-        quick_overload: 2,
-        overload_reasons: [],
-
-        exhaustion: {
-          e1: e_mean,
-          e2: e_mean,
-          e3: e_mean,
-        },
-        disengagement: {
-          d1: d_mean,
-          d2: d_mean,
-          d3: d_mean,
-        },
-        job_demands: {
-          jd1: 3,
-          jd2: 3,
-          jd3: 3,
-        },
-        recovery: {
-          sleep_hours: olbiData.sleep_hours,
-          recovery_score: olbiData.recovery_score,
-        },
-        quick_overload_data: {
-          rating: 2,
-          reasons: [],
-        },
-
-        working_hours: stdHours,
-        work_days_per_week: workDays,
-        overtime_hours: Math.round(avgOt + otToday),
-        has_deadline: "medium",
+        survey_type: "olbi_periodic",
+        questionnaire_version: "olbi-16-4pt-vi-v1",
+        exhaustion: { ...olbiData.exhaustion } as SurveyData["exhaustion"],
+        disengagement: { ...olbiData.disengagement } as SurveyData["disengagement"],
       };
     }
 
@@ -406,10 +387,13 @@ export default function SurveyTest() {
       isHighJobDemands ? dailyData.overload_reasons : [];
 
     return {
+      survey_type: "daily_checkin",
+      questionnaire_version: "sta-daily-9-v1",
       sleep_hours: dailyData.sleep_hours,
       recovery_score: dailyData.recovery_score,
       quick_overload: dailyData.quick_overload,
       overload_reasons: formattedReasons,
+      other_overload_reason: isHighJobDemands ? dailyData.other_overload_reason?.trim() : undefined,
 
       // STA structured groups (9 core items)
       exhaustion: {
@@ -434,6 +418,7 @@ export default function SurveyTest() {
       quick_overload_data: {
         rating: dailyData.quick_overload,
         reasons: formattedReasons,
+        other_reason: isHighJobDemands ? dailyData.other_overload_reason?.trim() : undefined,
       },
 
       // Work Baseline values sent for risk computation
@@ -444,21 +429,41 @@ export default function SurveyTest() {
     };
   };
 
+  const submissionId = useRef<string | undefined>(undefined);
+  const activeGroups = surveyMode === "olbi16"
+    ? [olbiData.exhaustion, olbiData.disengagement]
+    : [dailyData.exhaustion, dailyData.disengagement, dailyData.job_demands];
+  const answeredCount = activeGroups.flatMap(group => Object.values(group)).filter(value => value > 0).length;
+  const requiredCount = surveyMode === "olbi16" ? 16 : 9;
+
   // Submit survey - uses backend for analysis
   const handleSubmit = async () => {
+    if (submitting || answeredCount !== requiredCount) {
+      setError(`Vui lòng trả lời đủ ${requiredCount} câu trước khi gửi.`);
+      return;
+    }
     setSubmitting(true);
     setError("");
 
     try {
       const payload = buildPayload();
+      submissionId.current ??= `survey_${crypto.randomUUID()}`;
+      const saved = await surveyService.saveSurvey(payload, submissionId.current);
+      let analysis: AnalysisResult;
+      try {
+        analysis = await surveyService.analyze(payload, submissionId.current);
+      } catch (insightError) {
+        if (!saved.analysis_result) throw insightError;
+        analysis = { ...saved.analysis_result, questionnaire_scores: saved.survey.questionnaire_scores };
+      }
+      const completedPayload = { ...payload, questionnaire_scores: saved.survey.questionnaire_scores };
 
       // Step 1: Call backend to analyze survey
-      const analysis = await surveyService.analyze(payload);
       const uiResult = convertToUIResult(analysis);
       setAnalysisResult(uiResult);
 
       // Step 2: Location and place recommendations
-      let coords: { lat: number; lon: number } | null = currentLocation;
+      const coords: { lat: number; lon: number } | null = currentLocation;
       let latitude = coords?.lat || 0;
       let longitude = coords?.lon || 0;
 
@@ -502,8 +507,7 @@ export default function SurveyTest() {
         setRecommendations([]);
       }
 
-      // Step 4: Save survey to backend
-      await surveyService.saveSurvey(payload);
+      // Refresh history and daily statistics after the saved submission.
       await fetchHistory();
 
       try {
@@ -517,7 +521,7 @@ export default function SurveyTest() {
         console.error("Lỗi cập nhật stats sau khi submit:", err);
       }
 
-      setSubmittedPayload(payload);
+      setSubmittedPayload(completedPayload);
       setSubmitted(true);
     } catch (err) {
       console.error("Survey submit error:", err);
@@ -531,6 +535,9 @@ export default function SurveyTest() {
 
   // Reset
   const handleReset = () => {
+    submissionId.current = undefined;
+    setOlbiData({ ...OLBI_16_INITIAL_STATE });
+    setDailyData({ ...DAILY_CHECKIN_INITIAL_STATE });
     setSubmitted(false);
     setSubmittedPayload(null);
     setAnalysisResult(null);
@@ -539,22 +546,14 @@ export default function SurveyTest() {
   };
 
   // Fetch history
-  const fetchHistory = async () => {
+  const fetchHistory = useCallback(async () => {
     setLoadingHistory(true);
     try {
       const historyData = await surveyService.getHistory();
       const transformedHistory: HistorySurveyItem[] = historyData
         .slice(0, 20)
         .map((item) => {
-          const defaultSurvey: SurveyData = {
-            sleep_hours: 7,
-            working_hours: 8,
-            overtime_hours: 0,
-            has_deadline: "medium",
-            work_days_per_week: 5,
-            stress_level: 5,
-            motivation_level: 5,
-          };
+          const defaultSurvey: SurveyData = {};
           const surveyData = item.survey as SurveyData | undefined;
           return {
             id: item.id,
@@ -564,16 +563,40 @@ export default function SurveyTest() {
             created_at: item.created_at,
             status: (item.status as "in_progress" | "completed") || "completed",
             survey: surveyData || defaultSurvey,
-            analysis_result: (item as any).analysis_result,
+            analysis_result: item.analysis_result,
           };
         });
       setHistory(transformedHistory);
+      try {
+        setQuestionnaireStatus(await surveyService.getQuestionnaireStatus());
+      } catch (statusError) {
+        console.error("Không tải được lịch đánh giá", statusError);
+      }
     } catch (err) {
       console.error("Survey history error:", err);
     } finally {
       setLoadingHistory(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const initialize = async () => {
+      const results = await Promise.allSettled([
+        authService.getProfile(),
+        surveyService.getRollingStats(7),
+        surveyService.getAlerts(),
+        fetchHistory(),
+      ]);
+      if (cancelled) return;
+      const [profileResult, statsResult, alertsResult] = results;
+      if (profileResult.status === "fulfilled") setProfile(profileResult.value);
+      if (statsResult.status === "fulfilled") setRollingStats(statsResult.value);
+      if (alertsResult.status === "fulfilled") setAlerts(alertsResult.value.alerts || []);
+    };
+    void initialize();
+    return () => { cancelled = true; };
+  }, [fetchHistory]);
 
   // Get risk color
   const getRiskColor = (level: string) => {
@@ -639,6 +662,19 @@ export default function SurveyTest() {
         </div>
       )}
 
+      {questionnaireStatus && (
+        <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-900">
+          <p>{questionnaireStatus.today_completed ? "Bạn đã check-in hôm nay. Có thể cập nhật lại; thống kê dùng lần mới nhất trong ngày." : "Bạn chưa check-in hôm nay."}</p>
+          <p className="mt-1">{questionnaireStatus.is_due
+            ? "Đã đến lúc thực hiện OLBI định kỳ để cập nhật mức nền."
+            : `Lần OLBI tiếp theo được khuyến nghị từ ${new Date(questionnaireStatus.next_due_at!).toLocaleDateString("vi-VN")}.`}</p>
+          {questionnaireStatus.latest_olbi?.survey?.questionnaire_scores && <p className="mt-1">
+            OLBI gần nhất: cạn kiệt {questionnaireStatus.latest_olbi.survey.questionnaire_scores.means.exhaustion.toFixed(2)}/4 · mất gắn kết {questionnaireStatus.latest_olbi.survey.questionnaire_scores.means.disengagement.toFixed(2)}/4.
+          </p>}
+        </div>
+      )}
+      {detailLoading && <p role="status" className="text-sm text-indigo-700">Đang mở câu trả lời khảo sát...</p>}
+      {detailError && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{detailError}</p>}
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
@@ -646,18 +682,22 @@ export default function SurveyTest() {
           Khảo sát trạng thái & Đánh giá sức khỏe tinh thần
         </h1>
         <p className="text-sm text-gray-500 mt-1">
-          Đánh giá khoa học nguy cơ kiệt sức theo chuẩn OLBI & JD-R Model. Lựa
+          Theo dõi trạng thái công việc với OLBI và mô hình JD-R. Lựa
           chọn chế độ check-in hàng ngày hoặc bài test 16 câu định kỳ.
         </p>
       </div>
 
+      <Link to="/dashboard#olbi-progress" className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-white px-4 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-50">
+        <TrendingUp className="h-4 w-4" /> Xem tiến triển OLBI của tôi
+      </Link>
       {!submitted ? (
         <>
           {/* MODE SELECTOR TABS (Giải pháp 1: Chế độ Check-in Hàng ngày vs Bài Test OLBI 16 Câu Định Kỳ) */}
           <div className="bg-white rounded-2xl p-1.5 border border-gray-200 shadow-xs flex flex-col sm:flex-row gap-1.5">
             <button
               type="button"
-              onClick={() => setSurveyMode("daily")}
+              disabled={submitting}
+              onClick={() => { setSurveyMode("daily"); submissionId.current = undefined; setError(""); }}
               className={`flex-1 py-3 px-4 rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 cursor-pointer ${
                 surveyMode === "daily"
                   ? "bg-blue-600 text-white shadow-sm"
@@ -670,7 +710,8 @@ export default function SurveyTest() {
 
             <button
               type="button"
-              onClick={() => setSurveyMode("olbi16")}
+              disabled={submitting}
+              onClick={() => { setSurveyMode("olbi16"); submissionId.current = undefined; setError(""); }}
               className={`flex-1 py-3 px-4 rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 cursor-pointer ${
                 surveyMode === "olbi16"
                   ? "bg-indigo-600 text-white shadow-sm"
@@ -678,7 +719,7 @@ export default function SurveyTest() {
               }`}
             >
               <Sparkles className="w-4 h-4" />
-              Đánh Giá Định Kỳ OLBI (16 câu • Chuẩn Khoa Học)
+              Đánh Giá Định Kỳ OLBI (16 câu • OLBI)
             </button>
           </div>
 
@@ -687,15 +728,14 @@ export default function SurveyTest() {
               <Info className="w-5 h-5 text-indigo-600 shrink-0 mt-0.5" />
               <div>
                 <strong className="text-sm text-indigo-950">
-                  Chế độ Đánh giá Định kỳ & Chấm điểm Demo (Full OLBI 16 Items):
+                  Đánh giá định kỳ OLBI — 16 câu, thang 4 mức:
                 </strong>
                 <p className="mt-1 text-indigo-800">
-                  Bài test này áp dụng trọn vẹn 16 câu hỏi Oldenburg Burnout
-                  Inventory (8 câu Exhaustion + 8 câu Disengagement) đã được
-                  kiểm chứng tâm lý học chuẩn quốc tế. Giảng viên / Giám khảo có
-                  thể trải nghiệm test trực tiếp bất kỳ lúc nào để chấm điểm. Ở
-                  sản phẩm thực tế, bài test này được khuyến nghị thực hiện 2
-                  tuần / 1 tháng một lần để thiết lập điểm Baseline.
+                  Đánh giá trải nghiệm công việc nói chung qua hai chiều cạn kiệt
+                  và mất gắn kết. Trả lời theo mức độ đồng ý với từng phát biểu.
+                  Khuyến nghị thực hiện lại sau 14 ngày để tự theo dõi.
+                  Bản dịch tiếng Việt tham khảo; chưa được kiểm định trong dự án.
+                  Mức phân loại là quy ước của ứng dụng, không phải chẩn đoán.
                 </p>
               </div>
             </div>
@@ -745,7 +785,7 @@ export default function SurveyTest() {
           </div>
 
           {/* Survey Form */}
-          <div className="bg-white rounded-2xl shadow-sm p-6 space-y-8">
+          <fieldset disabled={submitting} className="bg-white rounded-2xl shadow-sm p-6 space-y-8 min-w-0">
             {surveyMode === "olbi16" ? (
               /* FORM 16 CÂU OLBI FULL VALIDATED */
               <div className="space-y-8">
@@ -781,6 +821,9 @@ export default function SurveyTest() {
                         )}
                       </div>
                       <LikertScale
+                        max={4}
+                        labels={OLBI_LIKERT_LABELS}
+                        reverseColor={q.reverse}
                         value={
                           olbiData.exhaustion[
                             q.key as keyof typeof olbiData.exhaustion
@@ -829,6 +872,9 @@ export default function SurveyTest() {
                         )}
                       </div>
                       <LikertScale
+                        max={4}
+                        labels={OLBI_LIKERT_LABELS}
+                        reverseColor={q.reverse}
                         value={
                           olbiData.disengagement[
                             q.key as keyof typeof olbiData.disengagement
@@ -848,74 +894,6 @@ export default function SurveyTest() {
                   ))}
                 </div>
 
-                {/* SECTION 3: Sleep & Recovery */}
-                <div className="space-y-5 pt-2">
-                  <div className="border-b border-gray-100 pb-3 flex items-center gap-2">
-                    <Moon className="w-5 h-5 text-purple-500" />
-                    <div>
-                      <h2 className="text-base font-semibold text-gray-900">
-                        3. Giấc ngủ & Hồi phục năng lượng (Sleep & Recovery)
-                      </h2>
-                      <p className="text-xs text-gray-500">
-                        Thời lượng ngủ và chất lượng hồi phục sau thời gian nghỉ
-                        ngơi.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-800 mb-2">
-                        Số giờ ngủ đêm qua:{" "}
-                        <span className="font-bold text-blue-600">
-                          {olbiData.sleep_hours} giờ
-                        </span>
-                      </label>
-                      <input
-                        type="range"
-                        min="3"
-                        max="12"
-                        step="0.5"
-                        value={olbiData.sleep_hours}
-                        onChange={(e) =>
-                          setOlbiData((prev) => ({
-                            ...prev,
-                            sleep_hours: parseFloat(e.target.value),
-                          }))
-                        }
-                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                      />
-                      <div className="flex justify-between text-xs text-gray-500 mt-1">
-                        <span>3 giờ</span>
-                        <span>7-8 giờ (khuyên nghị)</span>
-                        <span>12 giờ</span>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-800 mb-2">
-                        Cảm nhận hồi phục sau giấc ngủ/nghỉ ngơi
-                      </label>
-                      <LikertScale
-                        value={olbiData.recovery_score}
-                        onChange={(val) =>
-                          setOlbiData((prev) => ({
-                            ...prev,
-                            recovery_score: val,
-                          }))
-                        }
-                        labels={[
-                          "Rất mệt mỏi",
-                          "Mệt mỏi nhẹ",
-                          "Bình thường",
-                          "Khá thoải mái",
-                          "Rất sảng khoái/Tốt",
-                        ]}
-                        reverseColor={true}
-                      />
-                    </div>
-                  </div>
-                </div>
               </div>
             ) : (
               /* FORM 9 CÂU CHECK-IN HÀNG NGÀY (CHUẨN KHOA HỌC STA) */
@@ -1315,10 +1293,14 @@ export default function SurveyTest() {
               </div>
             )}
 
+            <p className="text-sm text-gray-600" role="status">
+              Đã trả lời {answeredCount}/{requiredCount} câu bắt buộc.
+              {surveyMode === "daily" && " Giấc ngủ, hồi phục và quá tải là thông tin bổ sung."}
+            </p>
             {/* Submit Button */}
             <button
               onClick={handleSubmit}
-              disabled={submitting}
+              disabled={submitting || answeredCount !== requiredCount}
               className="w-full flex items-center justify-center gap-2 px-6 py-3.5 bg-blue-600 text-white font-semibold rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-colors shadow-sm text-base"
             >
               {submitting ? (
@@ -1333,7 +1315,7 @@ export default function SurveyTest() {
                 </>
               )}
             </button>
-          </div>
+          </fieldset>
         </>
       ) : (
         /* RESULTS VIEW */
@@ -1365,10 +1347,10 @@ export default function SurveyTest() {
                     {analysisResult.risk_level === "critical"
                       ? "Nguy cơ nghiêm trọng"
                       : analysisResult.risk_level === "high"
-                      ? "Nguy cơ kiệt sức cao"
+                      ? "Tín hiệu E/D cao"
                       : analysisResult.risk_level === "medium"
-                      ? "Nguy cơ trung bình"
-                      : "Trạng thái ổn định / Nguy cơ thấp"}
+                      ? "Tín hiệu E/D trung bình"
+                      : "Tín hiệu E/D thấp"}
                   </span>
                 </div>
                 <p className="mt-2 text-sm leading-relaxed">
@@ -1467,7 +1449,7 @@ export default function SurveyTest() {
               )}
 
               {/* Rolling Stats Card */}
-              {rollingStats && (
+              {submittedPayload?.survey_type !== "olbi_periodic" && rollingStats && (
                 <div className="mt-6 border border-gray-200 rounded-xl overflow-hidden">
                   <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 flex items-center justify-between">
                     <h3 className="font-semibold text-gray-800 flex items-center gap-2">
@@ -1511,8 +1493,18 @@ export default function SurveyTest() {
                 </div>
               )}
 
+              {analysisResult.questionnaire_scores && (
+                <div className="grid grid-cols-2 gap-3">
+                  {Object.entries(analysisResult.questionnaire_scores.means).map(([key, mean]) => (
+                    <div key={key} className="p-3 bg-indigo-50 rounded-xl">
+                      <p className="text-xs text-gray-600">{key === "exhaustion" ? "Cạn kiệt năng lượng" : key === "disengagement" ? "Mất gắn kết" : "Yêu cầu công việc"}</p>
+                      <p className="text-xl font-bold text-indigo-700">{mean.toFixed(2)}/{analysisResult.questionnaire_scores!.scale_max}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
               {/* Dimensions Summary Grid */}
-              <div>
+              {submittedPayload?.survey_type !== "olbi_periodic" && <div>
                 <h3 className="text-sm font-semibold text-gray-800 mb-3">
                   Tổng quan các chỉ số trong ngày:
                 </h3>
@@ -1565,6 +1557,7 @@ export default function SurveyTest() {
                   )}
               </div>
 
+              }
               {/* Factors */}
               {analysisResult.factors && analysisResult.factors.length > 0 && (
                 <div>
@@ -1773,7 +1766,7 @@ export default function SurveyTest() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700 font-medium">
-                            Ngủ: {s.sleep_hours}h
+                            {s.survey_type === "olbi_periodic" ? "OLBI định kỳ · 16 câu" : "Check-in hàng ngày"}
                           </span>
                           {s.recovery_score && (
                             <span className="text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700 font-medium">
@@ -1847,8 +1840,9 @@ export default function SurveyTest() {
                   : "N/A"}
               </div>
 
+              <QuestionnaireAnswers survey={selectedHistoryItem.survey} />
               {/* Metrics */}
-              <div className="grid grid-cols-2 gap-3 text-sm">
+              {selectedHistoryItem.survey.survey_type !== "olbi_periodic" && <div className="grid grid-cols-2 gap-3 text-sm">
                 <div className="p-3 bg-gray-50 rounded-xl">
                   <span className="text-xs text-gray-500">Giờ ngủ</span>
                   <p className="text-base font-bold text-blue-600">
@@ -1881,6 +1875,7 @@ export default function SurveyTest() {
                 )}
               </div>
 
+              }
               {/* Overload Reasons in History if present */}
               {selectedHistoryItem.survey.overload_reasons &&
                 selectedHistoryItem.survey.overload_reasons.length > 0 && (
@@ -1933,4 +1928,22 @@ export default function SurveyTest() {
       )}
     </div>
   );
+}
+
+function QuestionnaireAnswers({ survey }: { survey: SurveyData }) {
+  if (!survey.survey_type) return null;
+  const periodic = survey.survey_type === "olbi_periodic";
+  return <div className="space-y-2 text-sm">
+    <p className="font-semibold">{periodic ? "OLBI định kỳ — 16 câu" : "Check-in hàng ngày — 9 câu"}</p>
+    {Object.entries(survey.questionnaire_scores?.means || {}).map(([key, mean]) =>
+      <p key={key}>{key === "exhaustion" ? "Cạn kiệt" : key === "disengagement" ? "Mất gắn kết" : "Yêu cầu công việc"}: {mean.toFixed(2)}/{survey.questionnaire_scores?.scale_max}</p>)}
+    {!periodic && Object.entries(SURVEY_QUESTIONS).flatMap(([group, questions]) => questions.map(q => {
+      const value = (survey[group as "exhaustion" | "disengagement"] as Record<string, number> | undefined)?.[q.key];
+      return <p key={q.key} className="border-t pt-2">{q.text} <strong>{value ?? "—"}/5</strong></p>;
+    }))}
+    {periodic && Object.entries(OLBI_16_QUESTIONS).flatMap(([group, questions]) => questions.map(q => {
+      const value = survey[group as "exhaustion" | "disengagement"]?.[q.key];
+      return <p key={q.key} className="border-t pt-2">{q.text} <strong>{value}/4</strong>{value ? ` · ${OLBI_LIKERT_LABELS[value - 1]}` : ""}</p>;
+    }))}
+  </div>;
 }

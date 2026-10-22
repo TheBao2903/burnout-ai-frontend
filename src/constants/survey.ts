@@ -114,34 +114,37 @@ export const SURVEY_QUESTIONS = {
   ],
 } as const;
 
-// Full Validated OLBI 16-Item Questionnaire (Oldenburg Burnout Inventory)
+// Reference Vietnamese translation, grouped by dimension; original item IDs retained.
+// Demerouti, Mostert & Bakker (2010), appendix, doi:10.1037/a0019408.
+// 1=strongly disagree, 4=strongly agree. Positive items reverse as 5 - answer.
+export const OLBI_LIKERT_LABELS = ['Hoàn toàn không đồng ý', 'Không đồng ý', 'Đồng ý', 'Hoàn toàn đồng ý'];
 export const OLBI_16_QUESTIONS = {
   exhaustion: [
-    { key: 'e1', text: 'Tôi luôn cần một khoảng thời gian dài để phục hồi lại năng lượng sau giờ làm việc.', reverse: false },
-    { key: 'e2', text: 'Sau khi đi làm về, tôi thường cảm thấy quá mệt mỏi để làm bất kỳ việc gì khác.', reverse: false },
-    { key: 'e3', text: 'Sau công việc, tôi vẫn thường cảm thấy tràn đầy năng lượng và có nhiều thời gian rảnh.', reverse: true },
-    { key: 'e4', text: 'Trong khi làm việc, tôi thường cảm thấy kiệt sức về mặt tinh thần.', reverse: false },
-    { key: 'e5', text: 'Khi bắt đầu ca làm việc, tôi vẫn luôn cảm thấy sung sức và khỏe khoắn.', reverse: true },
-    { key: 'e6', text: 'Chỉ cần nghĩ tới công việc vào buổi sáng là tôi đã cảm thấy mệt mỏi.', reverse: false },
-    { key: 'e7', text: 'Tôi cảm thấy mình có đủ năng lượng để giải quyết tốt các nhiệm vụ trong ngày.', reverse: true },
-    { key: 'e8', text: 'Công việc hiện tại khiến tôi cảm thấy cạn kiệt về cả thể chất lẫn tinh thần.', reverse: false },
+    { key: 'e1', originalId: 2, text: 'Có ngày tôi mệt trước khi đến làm.', reverse: false },
+    { key: 'e2', originalId: 4, text: 'Sau việc, tôi cần lâu hơn trước để hồi phục.', reverse: false },
+    { key: 'e3', originalId: 5, text: 'Tôi chịu được áp lực công việc rất tốt.', reverse: true },
+    { key: 'e4', originalId: 8, text: 'Trong công việc, tôi thường cạn kiệt cảm xúc.', reverse: false },
+    { key: 'e5', originalId: 10, text: 'Sau việc, tôi đủ sức cho hoạt động giải trí.', reverse: true },
+    { key: 'e6', originalId: 12, text: 'Sau công việc, tôi thường mệt mỏi, rã rời.', reverse: false },
+    { key: 'e7', originalId: 14, text: 'Tôi thường quản lý tốt khối lượng công việc.', reverse: true },
+    { key: 'e8', originalId: 16, text: 'Khi làm việc, tôi thường thấy tràn đầy năng lượng.', reverse: true },
   ],
   disengagement: [
-    { key: 'd1', text: 'Càng ngày tôi càng cảm thấy ít hứng thú và ít muốn gắn bó với công việc của mình.', reverse: false },
-    { key: 'd2', text: 'Tôi cảm thấy công việc mình đang làm thực sự có ý nghĩa và giá trị.', reverse: true },
-    { key: 'd3', text: 'Đôi khi tôi có cảm giác thờ ơ và không còn quan tâm tới công việc nữa.', reverse: false },
-    { key: 'd4', text: 'Tôi luôn tìm thấy những khía cạnh thú vị và động lực trong công việc.', reverse: true },
-    { key: 'd5', text: 'Khi làm việc, tôi chỉ muốn hoàn thành cho xong nhiệm vụ chứ không còn nhiệt huyết.', reverse: false },
-    { key: 'd6', text: 'Tôi cảm thấy tự hào và có nhiều niềm vui khi nhắc về công việc hiện tại.', reverse: true },
-    { key: 'd7', text: 'Càng ngày tôi càng cảm thấy có khoảng cách và sự xa rời đối với công việc.', reverse: false },
-    { key: 'd8', text: 'Tôi vẫn luôn giữ được sự tích cực và tinh thần cống hiến cho công việc.', reverse: true },
+    { key: 'd1', originalId: 1, text: 'Tôi luôn tìm được điều mới, thú vị trong việc.', reverse: true },
+    { key: 'd2', originalId: 3, text: 'Tôi ngày càng nói tiêu cực về công việc.', reverse: false },
+    { key: 'd3', originalId: 6, text: 'Gần đây, tôi làm việc máy móc, ít suy nghĩ.', reverse: false },
+    { key: 'd4', originalId: 7, text: 'Công việc là một thử thách tích cực với tôi.', reverse: true },
+    { key: 'd5', originalId: 9, text: 'Dần dần, người ta có thể xa rời nghề này.', reverse: false },
+    { key: 'd6', originalId: 11, text: 'Đôi lúc, nhiệm vụ công việc khiến tôi chán ngán.', reverse: false },
+    { key: 'd7', originalId: 13, text: 'Tôi chỉ hình dung mình làm loại công việc này.', reverse: true },
+    { key: 'd8', originalId: 15, text: 'Tôi cảm thấy ngày càng gắn bó với công việc.', reverse: true },
   ],
 } as const;
 
 export const DAILY_CHECKIN_INITIAL_STATE = {
-  exhaustion: { e1: 3, e2: 3, e3: 3 },
-  disengagement: { d1: 2, d2: 2, d3: 2 },
-  job_demands: { jd1: 3, jd2: 3, jd3: 3 },
+  exhaustion: { e1: 0, e2: 0, e3: 0 },
+  disengagement: { d1: 0, d2: 0, d3: 0 },
+  job_demands: { jd1: 0, jd2: 0, jd3: 0 },
   sleep_hours: 7,
   recovery_score: 3,
   quick_overload: 2,
@@ -149,8 +152,6 @@ export const DAILY_CHECKIN_INITIAL_STATE = {
 } as const;
 
 export const OLBI_16_INITIAL_STATE = {
-  exhaustion: { e1: 3, e2: 3, e3: 3, e4: 3, e5: 3, e6: 3, e7: 3, e8: 3 } as Record<string, number>,
-  disengagement: { d1: 3, d2: 3, d3: 3, d4: 3, d5: 3, d6: 3, d7: 3, d8: 3 } as Record<string, number>,
-  sleep_hours: 7 as number,
-  recovery_score: 3 as number,
+  exhaustion: Object.fromEntries(OLBI_16_QUESTIONS.exhaustion.map(q => [q.key, 0])) as Record<string, number>,
+  disengagement: Object.fromEntries(OLBI_16_QUESTIONS.disengagement.map(q => [q.key, 0])) as Record<string, number>,
 };

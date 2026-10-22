@@ -74,8 +74,20 @@ export interface DailyCheckinData {
   job_title?: string;
 }
 
+export interface QuestionnaireScores {
+  means: Record<string, number>;
+  levels: Record<string, 'low' | 'medium' | 'high'>;
+  scale_max: number;
+  risk_score: number;
+  risk_level: string;
+  scoring_version: string;
+}
+
 export interface SurveyData {
-  sleep_hours: number;
+  survey_type?: 'daily_checkin' | 'olbi_periodic';
+  questionnaire_version?: string;
+  questionnaire_scores?: QuestionnaireScores;
+  sleep_hours?: number;
   working_hours?: number;
   overtime_hours?: number;
   has_deadline?: string;
@@ -92,11 +104,13 @@ export interface SurveyData {
     e1: number;
     e2: number;
     e3?: number;
+    [key: string]: number | undefined;
   };
   disengagement?: {
     d1: number;
     d2?: number;
     d3?: number;
+    [key: string]: number | undefined;
   };
   job_demands?: {
     jd1: number;
@@ -144,6 +158,7 @@ export interface AIInsightUI {
 }
 
 export interface AnalysisResult {
+  questionnaire_scores?: QuestionnaireScores;
   risk_score: number;
   risk_level: 'low' | 'medium' | 'high' | 'critical';
   summary: string;
@@ -264,9 +279,8 @@ export interface HistoryItem {
   summary?: string;
   risk_level?: string;
   survey?: SurveyData;  // FIX: Đúng field từ API
-  // DEPRECATED: analysis_result KHÔNG còn trong survey
-  // Để lấy analysis, gọi /api/v1/assessments/{id}/result
-  analysis_result?: never;
+  // Server-computed snapshot for displaying saved questionnaire results.
+  analysis_result?: AnalysisResult;
   recommendations?: never;
 }
 
@@ -325,6 +339,7 @@ export interface HistorySurveyItem {
 }
 
 export interface AnalysisResultUI {
+  questionnaire_scores?: QuestionnaireScores;
   risk_score: number;
   risk_level: string;
   summary: string;

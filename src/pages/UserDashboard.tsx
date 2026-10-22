@@ -3,15 +3,13 @@
 // Tối ưu tốc độ tải với Skeleton & Cache
 // ==========================================
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
 import {
   Brain,
   Heart,
   Target,
   LogIn,
-  AlertTriangle,
-  CheckCircle,
   RotateCcw,
   Sparkles,
   ArrowRight,
@@ -38,6 +36,8 @@ import dashboardService, {
   type BurnoutAnalytics as BurnoutAnalyticsType,
 } from "../services/dashboard";
 import BurnoutAnalytics from "../components/burnout/BurnoutAnalytics";
+import OlbiProgress from "../components/burnout/OlbiProgress";
+import DashboardInsight from "../components/burnout/DashboardInsight";
 
 const { RangePicker } = DatePicker;
 
@@ -73,97 +73,79 @@ export default function UserDashboard() {
 
   // Khởi tạo state từ cache tương ứng với user & range nếu có
   const currentUserId = user?.uid || user?.id || null;
-  const initialDays = Math.max(1, Math.min(365, dateRange[1].diff(dateRange[0], "day") + 1));
-  const initialCacheKey = `${currentUserId}_${initialDays}`;
+  const startDate = dateRange[0].format("YYYY-MM-DD");
+  const endDate = dateRange[1].format("YYYY-MM-DD");
+  const initialCacheKey = `${currentUserId}_${startDate}_${endDate}`;
   const initialCached = dashboardMemoryCache.get(initialCacheKey);
 
-  const [analytics, setAnalytics] = useState<UserDashboardAnalytics | null>(
+  const [storedAnalytics, setAnalytics] = useState<UserDashboardAnalytics | null>(
     initialCached ? initialCached.analytics : null
   );
-  const [burnoutAnalytics, setBurnoutAnalytics] =
+  const [storedBurnoutAnalytics, setBurnoutAnalytics] =
     useState<BurnoutAnalyticsType | null>(initialCached ? initialCached.burnout : null);
   const [burnoutError, setBurnoutError] = useState<string | null>(null);
   const [loading, setLoading] = useState(!initialCached);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const fetchDashboardData = async (force = false) => {
-    // Chờ Firebase Auth sẵn sàng
-    await authService.waitForAuth();
+  const [responseKey, setResponseKey] = useState(initialCacheKey);
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const requestVersion = useRef(0);
+  const activeRequest = useRef<AbortController | null>(null);
+  const analytics = responseKey === initialCacheKey ? storedAnalytics : null;
+  const burnoutAnalytics = responseKey === initialCacheKey ? storedBurnoutAnalytics : null;
 
-    const uid = user?.uid || user?.id || null;
-    const days = Math.max(1, Math.min(365, dateRange[1].diff(dateRange[0], "day") + 1));
-    const cacheKey = `${uid}_${days}`;
+  const fetchDashboardData = useCallback(async (force = false) => {
+    const requestId = ++requestVersion.current;
+    activeRequest.current?.abort();
+    const controller = new AbortController();
+    activeRequest.current = controller;
+    const cacheKey = `${currentUserId}_${startDate}_${endDate}`;
     const cached = dashboardMemoryCache.get(cacheKey);
-    const isFresh = cached && (Date.now() - cached.timestamp < CACHE_TTL_MS);
-
-    // 1. SWR: Nếu đã có cache, hiển thị ngay lập tức (0ms)
-    if (cached) {
-      setAnalytics(cached.analytics);
-      setBurnoutAnalytics(cached.burnout);
-      setLoading(false);
-      // Nếu không ép force và cache còn mới (< 5 phút), không cần re-fetch
-      if (!force && isFresh) {
-        return;
-      }
-    } else {
-      // Chỉ hiện Skeleton khi hoàn toàn chưa có dữ liệu nào
-      setLoading(true);
-    }
-
-    setIsRefreshing(true);
-    setBurnoutError(null);
-
+    const isFresh = cached && Date.now() - cached.timestamp < CACHE_TTL_MS;
+    const isCurrent = () => requestId === requestVersion.current && !controller.signal.aborted;
     try {
-      const [analyticsRes, burnoutRes] = await Promise.allSettled([
-        dashboardService.getAnalytics(),
-        dashboardService.getBurnoutAnalytics(days),
-      ]);
-
-      let nextAnalytics = analytics;
-      let nextBurnout = burnoutAnalytics;
-
-      if (analyticsRes.status === "fulfilled") {
-        nextAnalytics = analyticsRes.value;
-        setAnalytics(nextAnalytics);
-      }
-
-      if (burnoutRes.status === "fulfilled") {
-        nextBurnout = burnoutRes.value;
-        setBurnoutAnalytics(nextBurnout);
-        setBurnoutError(null);
+      await authService.waitForAuth();
+      if (!isCurrent()) return;
+      setBurnoutError(null);
+      if (cached) {
+        setAnalytics(cached.analytics);
+        setBurnoutAnalytics(cached.burnout);
+        setResponseKey(cacheKey);
+        setLoading(false);
+        if (!force && isFresh) { setIsRefreshing(false); return; }
       } else {
-        console.error("UserDashboard burnout fetch error:", burnoutRes.reason);
-        const reason: any = burnoutRes.reason;
-        const msg = reason?.response?.data?.detail
-          ? (typeof reason.response.data.detail === "string"
-              ? reason.response.data.detail
-              : JSON.stringify(reason.response.data.detail))
-          : "Không thể tải dữ liệu burnout. Vui lòng thử lại.";
-        setBurnoutError(msg);
+        setLoading(true);
       }
-
-      // Cập nhật lại cache với dữ liệu mới nhất
-      if (nextAnalytics && nextBurnout) {
-        dashboardMemoryCache.set(cacheKey, {
-          analytics: nextAnalytics,
-          burnout: nextBurnout,
-          timestamp: Date.now(),
-        });
+      setIsRefreshing(true);
+      const window = { start_date: startDate, end_date: endDate };
+      const [analyticsRes, burnoutRes] = await Promise.allSettled([
+        dashboardService.getAnalytics(window, controller.signal),
+        dashboardService.getBurnoutAnalytics(30, undefined, window, controller.signal),
+      ]);
+      if (!isCurrent()) return;
+      const nextAnalytics = analyticsRes.status === "fulfilled" ? analyticsRes.value : cached?.analytics || null;
+      const nextBurnout = burnoutRes.status === "fulfilled" ? burnoutRes.value : cached?.burnout || null;
+      setAnalytics(nextAnalytics);
+      setBurnoutAnalytics(nextBurnout);
+      setResponseKey(cacheKey);
+      if (burnoutRes.status === "rejected") setBurnoutError("Không thể tải dữ liệu trong khoảng đã chọn. Vui lòng thử lại.");
+      if (nextAnalytics && nextBurnout && analyticsRes.status === "fulfilled" && burnoutRes.status === "fulfilled") {
+        dashboardMemoryCache.set(cacheKey, { analytics: nextAnalytics, burnout: nextBurnout, timestamp: Date.now() });
       }
-    } catch (err) {
-      console.error("UserDashboard fetch error:", err);
+    } catch {
+      if (isCurrent()) setBurnoutError("Không thể tải dashboard. Vui lòng thử lại.");
     } finally {
-      setLoading(false);
-      setIsRefreshing(false);
+      if (isCurrent()) { setLoading(false); setIsRefreshing(false); }
     }
-  };
+  }, [currentUserId, startDate, endDate]);
 
   useEffect(() => {
-    // SWR: Tự động dùng cache có sẵn, revalidate ngầm không chặn UI
-    if (isAuthReady || user) {
-      fetchDashboardData(false);
-    }
-  }, [dateRange, user?.uid, isAuthReady]);
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (!cancelled && isAuthReady && currentUserId) return fetchDashboardData(refreshVersion > 0);
+    });
+    return () => { cancelled = true; activeRequest.current?.abort(); requestVersion.current += 1; };
+  }, [fetchDashboardData, currentUserId, isAuthReady, refreshVersion]);
 
   // Handle preset change
   const handlePresetChange = (value: string) => {
@@ -205,26 +187,20 @@ export default function UserDashboard() {
       dayjs().subtract(6, "day").startOf("day"),
       dayjs().endOf("day"),
     ]);
-    fetchDashboardData(true);
+    setRefreshVersion(value => value + 1);
   };
 
-  const dateRangeLabel = useMemo(() => {
-    const days = dateRange[1].diff(dateRange[0], "day") + 1;
-    if (days === 1) return "Hôm nay";
-    if (days <= 7) return `${days} ngày qua`;
-    if (days <= 30) return `${days} ngày qua`;
-    return `${days} ngày qua`;
-  }, [dateRange]);
+  const dateRangeLabel = `${dateRange[0].format("DD/MM/YYYY")} – ${dateRange[1].format("DD/MM/YYYY")}`;
 
   // Lọc dữ liệu trends theo date range
   const filteredTrends = useMemo(() => {
     if (!analytics) return null;
-    const filterTrend = (trend: any[]) => {
+    const filterTrend = (trend: { date: string; count: number }[]) => {
       return trend.filter((item) => {
         const date = dayjs(item.date);
         return (
-          date.isAfter(dateRange[0].subtract(1, "day")) &&
-          date.isBefore(dateRange[1].add(1, "day"))
+          date.format("YYYY-MM-DD") >= startDate &&
+          date.format("YYYY-MM-DD") <= endDate
         );
       });
     };
@@ -234,12 +210,12 @@ export default function UserDashboard() {
       emotions_trend: filterTrend(analytics.emotions_trend || []),
       burnout_trend: filterTrend(analytics.burnout_trend || []),
     };
-  }, [analytics, dateRange]);
+  }, [analytics, startDate, endDate]);
 
   // Stats trong date range
   const rangeStats = useMemo(() => {
     if (!filteredTrends) return { logins: 0, assessments: 0, emotions: 0, burnout: 0 };
-    const sumTrend = (trend: any[]) =>
+    const sumTrend = (trend: { count: number }[]) =>
       trend.reduce((sum, item) => sum + (item.count || 0), 0);
 
     return {
@@ -249,12 +225,6 @@ export default function UserDashboard() {
       burnout: sumTrend(filteredTrends.burnout_trend),
     };
   }, [filteredTrends]);
-
-  // Health Metrics
-  const currentRiskLevel =
-    burnoutAnalytics?.current?.risk_level ||
-    analytics?.current_risk_level ||
-    null;
 
   const hasSurveyData =
     rangeStats.assessments > 0 ||
@@ -266,7 +236,6 @@ export default function UserDashboard() {
     (analytics?.total_emotion_analyses ?? 0) > 0 ||
     (analytics?.emotions_this_month ?? 0) > 0;
 
-  const avgConfidence = analytics?.avg_confidence || null;
 
   // Emotion distribution
   const emotionData = useMemo(() => {
@@ -279,74 +248,6 @@ export default function UserDashboard() {
       })
     );
   }, [analytics]);
-
-  const staCore = burnoutAnalytics?.sta_core;
-  const getRiskBadge = (risk: string | null) => {
-    if (staCore) {
-      const ex = staCore.exhaustion;
-      if (ex.level === "critical") {
-        return {
-          bg: "bg-red-500",
-          text: `Cạn Kiệt Nghiêm Trọng (${ex.score.toFixed(1)}/5)`,
-          desc: "Năng lượng đang ở mức cạn kiệt đáng báo động. Hãy cân nhắc nghỉ ngơi và giảm tải công việc.",
-        };
-      }
-      if (ex.level === "high") {
-        return {
-          bg: "bg-orange-500",
-          text: `Mức Cạn Kiệt Cao (${ex.score.toFixed(1)}/5)`,
-          desc: "Tín hiệu mệt mỏi tích lũy kéo dài. Cần chú ý sắp xếp thời gian tái tạo năng lượng.",
-        };
-      }
-      if (ex.level === "medium") {
-        return {
-          bg: "bg-yellow-500",
-          text: `Mức Độ Vừa Phải (${ex.score.toFixed(1)}/5)`,
-          desc: "Năng lượng và mức độ gắn kết công việc đang ở ngưỡng chấp nhận được.",
-        };
-      }
-      return {
-        bg: "bg-emerald-500",
-        text: `Năng Lượng Tốt & Cân Bằng (${ex.score.toFixed(1)}/5)`,
-        desc: "Thể trạng tinh thần thoải mái, sự gắn kết công việc duy trì rất tích cực!",
-      };
-    }
-
-    switch (risk) {
-      case "critical":
-        return {
-          bg: "bg-red-500",
-          text: "Nguy cơ Rất Cao (Cần nghỉ ngơi ngay)",
-          desc: "Mức độ kiệt sức đáng báo động. Hãy cân nhắc giảm tải công việc.",
-        };
-      case "high":
-        return {
-          bg: "bg-orange-500",
-          text: "Nguy cơ Cao (Cần chú ý)",
-          desc: "Có dấu hiệu căng thẳng kéo dài. Cần thư giãn và nghỉ ngơi sớm.",
-        };
-      case "medium":
-        return {
-          bg: "bg-yellow-500",
-          text: "Mức Trung Bình",
-          desc: "Sức khỏe tinh thần ở mức chấp nhận được, duy trì lối sống lành mạnh.",
-        };
-      case "low":
-        return {
-          bg: "bg-green-500",
-          text: "Trạng thái Tốt / An Toàn",
-          desc: "Tâm lý thoải mái, cân bằng công việc và cuộc sống rất tốt!",
-        };
-      default:
-        return {
-          bg: "bg-gray-500",
-          text: "Chưa đủ dữ liệu",
-          desc: "Hãy thực hiện bài khảo sát hoặc quét cảm xúc để đánh giá.",
-        };
-    }
-  };
-
-  const riskInfo = getRiskBadge(currentRiskLevel);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -373,11 +274,12 @@ export default function UserDashboard() {
               { value: "14days", label: "14 ngày qua" },
               { value: "30days", label: "30 ngày qua" },
               { value: "90days", label: "90 ngày qua" },
+              ...(preset === "custom" ? [{ value: "custom", label: "Tùy chỉnh" }] : []),
             ]}
           />
           <RangePicker
             value={dateRange}
-            onChange={(dates) => dates && setDateRange([dates[0]!, dates[1]!])}
+            onChange={(dates) => { if (dates?.[0] && dates[1]) { setPreset("custom"); setDateRange([dates[0].startOf("day"), dates[1].endOf("day")]); } }}
             format="DD/MM/YYYY"
             allowClear={false}
           />
@@ -397,6 +299,9 @@ export default function UserDashboard() {
           )}
         </div>
       </div>
+
+      <OlbiProgress startDate={startDate} endDate={endDate} />
+      <DashboardInsight startDate={startDate} endDate={endDate} />
 
       {/* SKELETON LOADING HOẶC NỘI DUNG CHÍNH */}
       {loading && !analytics ? (
@@ -522,7 +427,7 @@ export default function UserDashboard() {
           <div className="bg-white rounded-2xl shadow-sm p-6 border border-gray-100">
             <h3 className="text-base font-bold text-gray-900 mb-4 flex items-center gap-2">
               <Brain className="w-5 h-5 text-indigo-600" />
-              Báo Cáo Sức Khỏe Tinh Thần & Bối Cảnh Công Việc ({dateRangeLabel})
+              Check-in hằng ngày & Bối cảnh công việc ({dateRangeLabel})
             </h3>
             <BurnoutAnalytics
               data={burnoutAnalytics}
@@ -563,7 +468,7 @@ export default function UserDashboard() {
                         <Cell key={`cell-${index}`} fill={entry.color} />
                       ))}
                   </Pie>
-                  <Tooltip formatter={(value: any) => `${value} lượt`} />
+                  <Tooltip formatter={(value: number | string) => `${value} lượt`} />
                 </RechartsPie>
               </ResponsiveContainer>
             </div>

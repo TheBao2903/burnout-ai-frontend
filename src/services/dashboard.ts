@@ -131,13 +131,13 @@ export interface StaOverloadReason {
 
 export interface StaContext {
   job_demands: {
-    score: number;
-    level: string;
+    score: number | null;
+    level: string | null;
     label: string;
   };
   recovery: {
-    avg_sleep_hours: number;
-    avg_recovery_score: number;
+    avg_sleep_hours: number | null;
+    avg_recovery_score: number | null;
     status: 'good' | 'moderate' | 'poor' | string;
   };
   overload_stats: {
@@ -147,7 +147,7 @@ export interface StaContext {
     other_reasons: string[];
   };
   work_changes: {
-    total_overtime_hours: number;
+    total_overtime_hours: number | null;
     overtime_days: number;
   };
 }
@@ -155,12 +155,29 @@ export interface StaContext {
 export interface StaTrendItem {
   date: string;
   analyzed_at: string | null;
-  exhaustion: number;
-  disengagement: number;
-  job_demands: number;
-  recovery_score: number;
-  sleep_hours: number;
-  quick_overload: number;
+  exhaustion: number | null;
+  disengagement: number | null;
+  job_demands: number | null;
+  recovery_score: number | null;
+  sleep_hours: number | null;
+  quick_overload: number | null;
+}
+
+export interface ContextInsight {
+  summary: string;
+  key_observations: string[];
+  suggested_action: string;
+  reflection_question: string;
+  source: 'ai' | 'rules';
+  reason: string | null;
+  model: string | null;
+  generated_at: string;
+  from_cache: boolean;
+  window: { start_date: string; end_date: string; timezone: string; calendar_days: number };
+  coverage: { daily_days: number; daily_complete_core_days: number; selected_calendar_days: number; olbi_records: number; environment_records: number; facial_records: number; chat_messages: number; analyzed_chat_messages: number; source_status: Record<string, string> };
+  data_sufficiency: string;
+  limitations: string[];
+  last_observation_at: string | null;
 }
 
 export interface SynthesizedInsight {
@@ -192,19 +209,64 @@ export interface BurnoutAnalytics {
   synthesized_insight?: SynthesizedInsight | null;
 }
 
+export interface OlbiHistoryPoint {
+  id: string;
+  assessment_id: string | null;
+  sequence: number;
+  completed_at: string;
+  timestamp: number;
+  exhaustion: number;
+  disengagement: number;
+  change_from_previous: Record<'exhaustion' | 'disengagement', number | null>;
+}
+
+export interface DashboardDateRange { start_date: string; end_date: string; }
+
+export interface OlbiProgressData {
+  start_date: string | null;
+  end_date: string | null;
+  period_days: number | null;
+  scale_max: 4;
+  total_records: number;
+  visible_records: number;
+  excluded_records: number;
+  points: OlbiHistoryPoint[];
+  baseline_at: string | null;
+  latest_at: string | null;
+  next_due_at: string | null;
+  comparisons: Record<'exhaustion' | 'disengagement', {
+    baseline: number | null;
+    latest: number | null;
+    change_from_baseline: number | null;
+    change_from_previous: number | null;
+  }>;
+  direction: 'decreasing' | 'increasing' | 'unchanged' | 'mixed' | 'insufficient_data';
+  summary: string;
+}
+
 export const dashboardService = {
+  async getContextInsight(range: DashboardDateRange, signal?: AbortSignal): Promise<ContextInsight> {
+    const response = await api.get<ContextInsight>('/api/v1/dashboard/context-insight', { params: range, signal });
+    return response.data;
+  },
+  async getOlbiHistory(range: DashboardDateRange, signal?: AbortSignal): Promise<OlbiProgressData> {
+    const response = await api.get<OlbiProgressData>('/api/v1/dashboard/olbi-history', {
+      params: range, signal,
+    });
+    return response.data;
+  },
   /**
    * Get user dashboard analytics
    */
-  async getAnalytics(): Promise<UserDashboardAnalytics> {
-    const response = await api.get<UserDashboardAnalytics>('/api/v1/dashboard/analytics');
+  async getAnalytics(range?: DashboardDateRange, signal?: AbortSignal): Promise<UserDashboardAnalytics> {
+    const response = await api.get<UserDashboardAnalytics>('/api/v1/dashboard/analytics', { params: range, signal });
     return response.data;
   },
 
   /**
    * Get user dashboard overview
    */
-  async getOverview(): Promise<any> {
+  async getOverview(): Promise<Record<string, unknown>> {
     const response = await api.get('/api/v1/dashboard/overview');
     return response.data;
   },
@@ -212,7 +274,7 @@ export const dashboardService = {
   /**
    * Get user burnout history
    */
-  async getBurnoutHistory(limit: number = 30): Promise<any> {
+  async getBurnoutHistory(limit: number = 30): Promise<Record<string, unknown>> {
     const response = await api.get('/api/v1/dashboard/burnout-history', {
       params: { limit },
     });
@@ -222,7 +284,7 @@ export const dashboardService = {
   /**
    * Get user emotion history
    */
-  async getEmotionHistory(limit: number = 30): Promise<any> {
+  async getEmotionHistory(limit: number = 30): Promise<Record<string, unknown>> {
     const response = await api.get('/api/v1/dashboard/emotion-history', {
       params: { limit },
     });
@@ -232,12 +294,12 @@ export const dashboardService = {
   /**
    * Get burnout analytics - NEW endpoint with full burnout data
    */
-  async getBurnoutAnalytics(days: number = 30, userId?: string): Promise<BurnoutAnalytics> {
+  async getBurnoutAnalytics(days: number = 30, userId?: string, range?: DashboardDateRange, signal?: AbortSignal): Promise<BurnoutAnalytics> {
     const response = await api.get<BurnoutAnalytics>('/api/v1/dashboard/burnout-analytics', {
       params: {
-        days,
+        ...(range || { days }),
         ...(userId ? { user_id: userId } : {}),
-      },
+      }, signal,
     });
     return response.data;
   },
